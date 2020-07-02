@@ -16,16 +16,20 @@ def get_gaussian_kernel(device="cpu"):
     return gaussian_k
 
 def pyramid_down(image, device="cpu"):
-    gaussian_k = get_gaussian_kernel(device=device)        
+    gaussian_k = get_gaussian_kernel(device=device)
     # channel-wise conv(important)
-    multiband = [F.conv2d(image[:, i:i + 1,:,:], gaussian_k, padding=2, stride=2) for i in range(3)]
+    n_channels = image.shape[1]
+    multiband = [F.conv2d(image[:, i:i + 1,:,:], gaussian_k, padding=2, stride=2)
+                 for i in range(n_channels)]
     down_image = torch.cat(multiband, dim=1)
     return down_image
 
 def pyramid_up(image, device="cpu"):
     gaussian_k = get_gaussian_kernel(device=device)
     upsample = F.interpolate(image, scale_factor=2)
-    multiband = [F.conv2d(upsample[:, i:i + 1,:,:], gaussian_k, padding=2) for i in range(3)]
+    n_channels = image.shape[1]
+    multiband = [F.conv2d(upsample[:, i:i + 1,:,:], gaussian_k, padding=2)
+                 for i in range(n_channels)]
     up_image = torch.cat(multiband, dim=1)
     return up_image
 
@@ -48,7 +52,7 @@ def laplacian_pyramid(original, n_pyramids, device="cpu"):
         diff = pyramids[i] - pyramid_up(pyramids[i + 1], device=device)
         laplacian.append(diff)
     # Add last gaussian pyramid
-    laplacian.append(pyramids[len(pyramids) - 1])        
+    laplacian.append(pyramids[len(pyramids) - 1])
     return laplacian
 
 def minibatch_laplacian_pyramid(image, n_pyramids, batch_size, device="cpu"):
@@ -91,21 +95,22 @@ def extract_patches(pyramid_layer, slice_indices,
     std, mean = torch.std_mean(x, dim=(0, 1, 3, 4), keepdim=True)
     x = (x - mean) / (std + 1e-8)
     # reshape to 2rank
-    x = x.reshape(-1, 3 * slice_size * slice_size)
+    n_channels = x.shape[-3]
+    x = x.reshape(-1, n_channels * slice_size * slice_size)
     return x
-        
-def swd(image1, image2, 
+
+def swd(image1, image2,
         n_pyramids=None, slice_size=7, n_descriptors=128,
         n_repeat_projection=128, proj_per_repeat=4, device="cpu", return_by_resolution=False,
-        pyramid_batchsize=128):
+        pyramid_batchsize=128, smallest_res=16):
     # n_repeat_projectton * proj_per_repeat = 512
     # Please change these values according to memory usage.
-    # original = n_repeat_projection=4, proj_per_repeat=128    
-    assert image1.size() == image2.size()
+    # original = n_repeat_projection=4, proj_per_repeat=128
+    assert image1.size()[1:] == image2.size()[1:]
     assert image1.ndim == 4 and image2.ndim == 4
 
     if n_pyramids is None:
-        n_pyramids = int(np.rint(np.log2(image1.size(2) // 16)))
+        n_pyramids = int(np.rint(np.log2(image1.size(2) // smallest_res)))
     with torch.no_grad():
         # minibatch laplacian pyramid for cuda memory reasons
         pyramid1 = minibatch_laplacian_pyramid(image1, n_pyramids, pyramid_batchsize, device=device)
@@ -136,12 +141,17 @@ def swd(image1, image2,
                 proj2 = torch.matmul(p2, rand)
                 proj1, _ = torch.sort(proj1, dim=0)
                 proj2, _ = torch.sort(proj2, dim=0)
+                if proj2.shape[0] != proj1.shape[0]:
+                    ratio = proj2.shape[0] / proj1.shape[0]
+                    assert ratio == int(ratio)
+                    ratio = int(ratio)
+                    proj1 = torch.repeat_interleave(proj1, repeats=ratio, dim=0)
                 d = torch.abs(proj1 - proj2)
                 distances.append(torch.mean(d))
 
             # swd
             result.append(torch.mean(torch.stack(distances)))
-        
+
         # average over resolution
         result = torch.stack(result) * 1e3
         if return_by_resolution:
