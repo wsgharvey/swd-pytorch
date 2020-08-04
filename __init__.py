@@ -1,1 +1,1 @@
-from .swd import swd
+from .swd import SWD
