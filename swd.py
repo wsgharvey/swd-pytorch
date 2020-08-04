@@ -105,11 +105,12 @@ def extract_patches(pyramid_layer, slice_indices,
 
 class SWD():
 
-    def __init__(self, H, W, n_pyramids=None, slice_size=7, n_descriptors=128,
+    def __init__(self, C, H, W, n_pyramids=None, slice_size=7, n_descriptors=128,
                  n_repeat_projection=128, proj_per_repeat=4, device="cpu",
                  return_by_resolution=False, pyramid_batchsize=128,
                  smallest_res=16, seed=0):
 
+        self.C = C
         self.H = H
         self.W = W
         if n_pyramids is None:
@@ -142,7 +143,7 @@ class SWD():
             indices = torch.randperm(n)[:self.n_descriptors]
 
             n_projections = self.proj_per_repeat * self.n_repeat_projection
-            projections = torch.randn(self.slice_size**2, n_projections).to(self.device)
+            projections = torch.randn(self.C*self.slice_size**2, n_projections).to(self.device)
             projections = projections / torch.std(projections, dim=0, keepdim=True)  # normalize
 
             self.projections[i_pyramid] = {'indices': indices,
@@ -176,7 +177,7 @@ class SWD():
                 all_rand = self.projections[i_pyramid]['projections']
                 for rand in torch.chunk(all_rand, chunks=self.n_repeat_projection, dim=1):
                     # rand = torch.randn(p1.size(1), proj_per_repeat).to(device)  # (slice_size**2*ch)
-                    # rand = rand / torch.std(rand, dim=0, keepdim=True)  # noramlize
+                    # rand = rand / torch.std(rand, dim=0, keepdim=True)  # normalize
                     # projection
                     proj1 = torch.matmul(p1, rand)
                     proj2 = torch.matmul(p2, rand)  # n_images*n_indices x proj_per_repeat
