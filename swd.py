@@ -217,4 +217,4 @@ class SWD():
             sum_ += d
             n_ += 1
 
-        return sum_ / n_
+        return 1000 * sum_ / n_
