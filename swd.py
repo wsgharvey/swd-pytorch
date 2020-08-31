@@ -1,8 +1,9 @@
+import os
 import numpy as np
 import math
 import torch
 import torch.nn.functional as F
-
+import glob
 
 # Gaussian blur kernel
 def get_gaussian_kernel(device="cpu"):
@@ -109,14 +110,19 @@ class SWD():
     def __init__(self, C, H, W, n_pyramids=None, slice_size=7, n_descriptors=128,
                  n_repeat_projection=128, proj_per_repeat=4, device="cpu",
                  return_by_resolution=False, pyramid_batchsize=128,
-                 smallest_res=16, seed=0):
+                 smallest_res=16, seed=0, save_to_disk=True,
+                 allowed_gpu_mem_per_1000_images=10e6):
 
         self.C = C
         self.H = H
         self.W = W
+        final_proj_elements_per_image = n_descriptors * n_repeat_projection * proj_per_repeat
+        mem_per_1000_images = final_proj_elements_per_image * 1000 * 4
+        self.n_chunks = math.ceil(mem_per_1000_images / allowed_gpu_mem_per_1000_images)
         if n_pyramids is None:
             n_pyramids = int(np.rint(np.log2(H // smallest_res)))
         self.n_pyramids = n_pyramids
+        self.save_to_disk = save_to_disk
 
         kwarg_names = ['n_pyramids', 'slice_size', 'n_descriptors',
                        'n_repeat_projection', 'proj_per_repeat', 'device',
@@ -128,6 +134,10 @@ class SWD():
         self.sample_projections()
         self.all_projected1 = {i_pyramid: [] for i_pyramid in range(self.n_pyramids + 1)}   # will become n_images x n_descriptors x n_projections
         self.all_projected2 = {i_pyramid: [] for i_pyramid in range(self.n_pyramids + 1)}
+
+        self.ID = np.random.randint(2**63)
+        self.img_batch_i = 0
+        self.ps = {}
 
     def sample_projections(self):
 
@@ -177,16 +187,26 @@ class SWD():
                 all_proj2 = []
                 all_rand = self.projections[i_pyramid]['projections']
                 for rand in torch.chunk(all_rand, chunks=self.n_repeat_projection, dim=1):
-                    # rand = torch.randn(p1.size(1), proj_per_repeat).to(device)  # (slice_size**2*ch)
-                    # rand = rand / torch.std(rand, dim=0, keepdim=True)  # normalize
-                    # projection
                     proj1 = torch.matmul(p1, rand)
                     proj2 = torch.matmul(p2, rand)  # n_images*n_indices x proj_per_repeat
                     all_proj1.append(proj1)
                     all_proj2.append(proj2)
 
-                self.all_projected1[i_pyramid].append(torch.cat(all_proj1, dim=1))
-                self.all_projected2[i_pyramid].append(torch.cat(all_proj2, dim=1))
+                self.save_projected(i_pyramid, torch.cat(all_proj1, dim=1), torch.cat(all_proj2, dim=1))
+        self.img_batch_i += 1
+
+    def projection_name(self, pyramid_i, chunk_i, img_batch_i, proj_i):
+        return f"./swd-temp-projection-{pyramid_i}-{img_batch_i}-{chunk_i}-{proj_i}-{img_batch_i}-{self.ID}.pt"
+
+    def save_projected(self, pyramid_i, proj1, proj2):
+        for chunk_i, (p1, p2) in enumerate(zip(torch.chunk(proj1, self.n_chunks, dim=1),
+                                               torch.chunk(proj2, self.n_chunks, dim=1))):
+            for proj_i, p in enumerate([p1, p2]):
+                fname = self.projection_name(pyramid_i, chunk_i, self.img_batch_i, proj_i)
+                if self.save_to_disk:
+                    torch.save(p, fname)
+                else:
+                    self.ps[fname] = p
 
     def get_swd(self):
 
@@ -204,16 +224,42 @@ class SWD():
                 p2, _ = torch.sort(p2, dim=0)
                 return torch.sum(torch.abs(p1-p2)).cpu()
 
-            proj1 = torch.cat(self.all_projected1[i_pyramid], dim=0)
-            proj2 = torch.cat(self.all_projected2[i_pyramid], dim=0)
-
-            n_chunks = math.ceil((proj1.numel()*4) / 100e6)  # roughly limit stuff moved to GPU to 100MB
+            # we load chunks from memory, and then concatenate
+            chunk_i = 0
+            projected_numel = 0
             total_distance = 0
-            for p1, p2 in zip(torch.chunk(proj1, chunks=n_chunks, dim=1),
-                              torch.chunk(proj2, chunks=n_chunks, dim=1)):
-                total_distance += distance(p1, p2) / proj1.numel()
+            while True:  # iterate over chunks of projections
 
-            sum_ += total_distance
+                # load chunk by iterating over all projected images
+                proj1 = []
+                proj2 = []
+                img_batch_i = 0
+                while True:
+                    fname1 = self.projection_name(i_pyramid, chunk_i, img_batch_i, 0)
+                    fname2 = self.projection_name(i_pyramid, chunk_i, img_batch_i, 1)
+                    if self.save_to_disk:
+                        proj1.append(torch.load(fname1))
+                        proj2.append(torch.load(fname2))
+                    else:
+                        proj1.append(self.ps[fname1])
+                        proj2.append(self.ps[fname2])
+                    img_batch_i += 1
+                    if not os.path.exists(self.projection_name(0, 0, img_batch_i, 0)):
+                        break
+                proj1 = torch.cat(proj1, dim=0)
+                proj2 = torch.cat(proj2, dim=0)
+                total_distance += distance(proj1, proj2)
+                projected_numel += proj1.numel()
+
+                chunk_i += 1
+                if not os.path.exists(self.projection_name(0, chunk_i, 0, 0)):
+                    break
+
+            sum_ += total_distance / projected_numel
             n_ += 1
 
         return 1000 * sum_ / n_
+
+    def clean_up(self):
+        for fname in glob.glob(f'./swd-temp-*{self.ID}*.pt'):
+            os.remove(fname)
