@@ -197,8 +197,11 @@ class SWD():
 
             def distance(p1, p2):
                 # compute summed over a minibatch of the descriptors
-                p1, _ = torch.sort(p1.cuda(), dim=0)
-                p2, _ = torch.sort(p2.cuda(), dim=0)
+                if torch.cuda.is_available:
+                    p1 = p1.cuda()
+                    p2 = p2.cuda()
+                p1, _ = torch.sort(p1, dim=0)
+                p2, _ = torch.sort(p2, dim=0)
                 return torch.sum(torch.abs(p1-p2)).cpu()
 
             proj1 = torch.cat(self.all_projected1[i_pyramid], dim=0)
