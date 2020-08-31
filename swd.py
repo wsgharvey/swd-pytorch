@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import torch
 import torch.nn.functional as F
 
@@ -187,21 +188,6 @@ class SWD():
                 self.all_projected1[i_pyramid].append(torch.cat(all_proj1, dim=1))
                 self.all_projected2[i_pyramid].append(torch.cat(all_proj2, dim=1))
 
-            #     #     proj1, _ = torch.sort(proj1, dim=0)
-            #     #     proj2, _ = torch.sort(proj2, dim=0)
-            #     #     # d = torch.abs(proj1 - proj2)
-            #     #     # distances.append(torch.mean(d))
-
-            #     # # swd
-            #     # result.append(torch.mean(torch.stack(distances)))
-
-            # # average over resolution
-            # result = torch.stack(result) * 1e3
-            # if return_by_resolution:
-            #     return result.cpu()
-            # else:
-            #     return torch.mean(result).cpu()
-
     def get_swd(self):
 
         sum_ = 0
@@ -209,12 +195,22 @@ class SWD():
 
         for i_pyramid in range(self.n_pyramids + 1):
 
+            def distance(p1, p2):
+                # compute summed over a minibatch of the descriptors
+                p1, _ = torch.sort(p1.cuda(), dim=0)
+                p2, _ = torch.sort(p2.cuda(), dim=0)
+                return torch.sum(torch.abs(p1-p2)).cpu()
+
             proj1 = torch.cat(self.all_projected1[i_pyramid], dim=0)
             proj2 = torch.cat(self.all_projected2[i_pyramid], dim=0)
-            proj1, _ = torch.sort(proj1, dim=0)
-            proj2, _ = torch.sort(proj2, dim=0)
-            d = torch.mean(torch.abs(proj1 - proj2))
-            sum_ += d
+
+            n_chunks = math.ceil((proj1.numel()*4) / 100e6)  # roughly limit stuff moved to GPU to 100MB
+            total_distance = 0
+            for p1, p2 in zip(torch.chunk(proj1, chunks=n_chunks, dim=1),
+                              torch.chunk(proj2, chunks=n_chunks, dim=1)):
+                total_distance += distance(p1, p2) / proj1.numel()
+
+            sum_ += total_distance
             n_ += 1
 
         return 1000 * sum_ / n_
