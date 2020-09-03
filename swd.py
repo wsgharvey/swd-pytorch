@@ -195,13 +195,17 @@ class SWD():
                 self.save_projected(i_pyramid, torch.cat(all_proj1, dim=1), torch.cat(all_proj2, dim=1))
         self.img_batch_i += 1
 
-    def projection_name(self, pyramid_i, chunk_i, img_batch_i, proj_i):
+    @property
+    def tmpdir(self):
         k = 'SWD_TMPDIR'
         if k in os.environ:
-            d = os.environ[k]
+            return os.environ[k]
         else:
-            d = '.'
-        return os.path.join(d, f"swd-temp-projection-{pyramid_i}-{img_batch_i}-{chunk_i}-{proj_i}-{self.ID}.pt")
+            return '.'
+
+    def projection_name(self, pyramid_i, chunk_i, img_batch_i, proj_i):
+        return os.path.join(
+            self.tmpdir, f"swd-temp-projection-{pyramid_i}-{img_batch_i}-{chunk_i}-{proj_i}-{self.ID}.pt")
 
     def save_projected(self, pyramid_i, proj1, proj2):
         for chunk_i, (p1, p2) in enumerate(zip(torch.chunk(proj1, self.n_chunks, dim=1),
@@ -266,5 +270,5 @@ class SWD():
         return 1000 * sum_ / n_
 
     def clean_up(self):
-        for fname in glob.glob(f'./swd-temp-*{self.ID}*.pt'):
+        for fname in glob.glob(f'{self.tmpdir}/swd-temp-*{self.ID}*.pt'):
             os.remove(fname)
