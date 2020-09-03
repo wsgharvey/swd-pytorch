@@ -196,7 +196,12 @@ class SWD():
         self.img_batch_i += 1
 
     def projection_name(self, pyramid_i, chunk_i, img_batch_i, proj_i):
-        return f"./swd-temp-projection-{pyramid_i}-{img_batch_i}-{chunk_i}-{proj_i}-{img_batch_i}-{self.ID}.pt"
+        k = 'SWD_TMPDIR'
+        if k in os.environ:
+            d = os.environ[k]
+        else:
+            d = '.'
+        return os.path.join(d, f"swd-temp-projection-{pyramid_i}-{img_batch_i}-{chunk_i}-{proj_i}-{self.ID}.pt")
 
     def save_projected(self, pyramid_i, proj1, proj2):
         for chunk_i, (p1, p2) in enumerate(zip(torch.chunk(proj1, self.n_chunks, dim=1),
@@ -204,7 +209,7 @@ class SWD():
             for proj_i, p in enumerate([p1, p2]):
                 fname = self.projection_name(pyramid_i, chunk_i, self.img_batch_i, proj_i)
                 if self.save_to_disk:
-                    torch.save(p, fname)
+                    torch.save(p.clone(), fname)
                 else:
                     self.ps[fname] = p
 
